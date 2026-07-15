@@ -1,20 +1,23 @@
 """
-Builds a big list of movie TITLES ONLY (no reviews) for Reviewdle's
-autocomplete/guess box. The idea: the box a player types into should let them
-guess pretty much any movie they can think of, not just the ~600 titles that
-can actually BE the answer -- otherwise a curious player could view the page
-source, see the datalist, and realize the answer must be one of a short list.
+Builds a big TITLE -> YEAR map (no reviews) for Reviewdle's autocomplete/guess
+box. The idea: the box a player types into should let them guess pretty much
+any movie they can think of, not just the ~600 titles that can actually BE
+the answer -- otherwise a curious player could view the page source, see the
+datalist, and realize the answer must be one of a short list. Every option
+in the dropdown also needs a "(year)" tag, so this version captures release
+year alongside title.
 
 This is much faster than build_review_db.py because it doesn't fetch reviews
-or summaries -- just id + title per page of results (20 movies per API call),
-so scanning tens of thousands of titles takes minutes, not hours.
+or summaries -- just id + title + release date per page of results (20 movies
+per API call), so scanning tens of thousands of titles takes minutes, not
+hours.
 
 Usage:
     python3 build_title_list.py YOUR_TMDB_API_KEY --out reviewdle_titles.json
 
 Combines several TMDb /discover/movie sort strategies with a low vote-count
 floor to maximize coverage (popular blockbusters AND obscure/indie titles),
-dedupes by TMDb id, and writes out a plain JSON list of titles.
+dedupes by TMDb id, and writes out a JSON object of {"Title": "Year", ...}.
 """
 
 import sys
@@ -61,7 +64,7 @@ def api_get(path, api_key, retries=3, **params):
 
 def collect_titles(api_key, strategies=STRATEGIES, max_pages=500):
     seen_ids = set()
-    titles = {}
+    title_year = {}  # title -> year, first strategy to see a title wins (popularity.desc goes first)
     for sort_by, min_votes in strategies:
         page = 1
         got_this_strategy = 0
@@ -82,20 +85,22 @@ def collect_titles(api_key, strategies=STRATEGIES, max_pages=500):
                 break
             for m in results:
                 mid = m["id"]
-                if mid not in seen_ids:
-                    seen_ids.add(mid)
-                    t = (m.get("title") or "").strip()
-                    if t:
-                        titles[mid] = t
-                        got_this_strategy += 1
+                if mid in seen_ids:
+                    continue
+                seen_ids.add(mid)
+                t = (m.get("title") or "").strip()
+                y = (m.get("release_date") or "")[:4]
+                if t and t not in title_year:
+                    title_year[t] = y  # may be "" if release date unknown
+                    got_this_strategy += 1
             if page >= data.get("total_pages", 1):
                 break
             page += 1
             if page % 50 == 0:
-                print(f"  ...{sort_by} page {page}, total unique titles so far: {len(titles)}")
+                print(f"  ...{sort_by} page {page}, total unique titles so far: {len(title_year)}")
             time.sleep(0.02)
-        print(f"strategy '{sort_by}' (vote_count>={min_votes}) added {got_this_strategy} new titles; running total {len(titles)}")
-    return sorted(set(titles.values()))
+        print(f"strategy '{sort_by}' (vote_count>={min_votes}) added {got_this_strategy} new titles; running total {len(title_year)}")
+    return title_year
 
 
 def main():
@@ -104,12 +109,12 @@ def main():
     ap.add_argument("--out", default="reviewdle_titles.json")
     args = ap.parse_args()
 
-    print("Collecting movie titles across multiple TMDb discovery strategies...")
-    titles = collect_titles(args.api_key)
-    print(f"\nDone. {len(titles)} unique titles collected.")
+    print("Collecting movie titles + years across multiple TMDb discovery strategies...")
+    title_year = collect_titles(args.api_key)
+    print(f"\nDone. {len(title_year)} unique titles collected.")
 
     with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(titles, f, indent=2, ensure_ascii=False)
+        json.dump(title_year, f, indent=2, ensure_ascii=False)
     print(f"Saved to {args.out}")
 
 
