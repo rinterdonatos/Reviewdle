@@ -96,12 +96,23 @@
   .guess-slot.correct .idx::after { content: "✓"; color: var(--green); margin-left: 6px; }
 
   form.guess-form { display: flex; gap: 8px; margin-top: 10px; }
+  .input-wrap { position: relative; flex: 1; }
   input[type="text"] {
-    flex: 1; font-family: inherit; font-size: 0.95rem; padding: 10px 12px;
+    width: 100%; font-family: inherit; font-size: 0.95rem; padding: 10px 12px;
     background: var(--bg-alt); border: 1px solid var(--border); border-radius: 6px; color: var(--text);
   }
   input[type="text"]:focus { outline: none; border-color: var(--gold-dim); }
   input[type="text"]:disabled { opacity: 0.4; }
+
+  .suggestions {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 30;
+    background: var(--bg-alt); border: 1px solid var(--border); border-radius: 6px;
+    max-height: 240px; overflow-y: auto; display: none;
+    box-shadow: 0 8px 20px rgba(0,0,0,0.35);
+  }
+  .suggestions.show { display: block; }
+  .suggestion-item { padding: 9px 12px; cursor: pointer; font-size: 0.9rem; }
+  .suggestion-item:hover, .suggestion-item.active { background: #29242f; }
 
   .status { text-align: center; font-size: 1.05rem; margin: 6px 0 2px; min-height: 1.4em; }
   .status.win { color: var(--green); font-weight: bold; }
@@ -128,7 +139,7 @@
 <div class="wrap">
   <header>
     <div class="reel"><span></span><span></span><span></span><span></span><span></span></div>
-    <h1> REVIEWDLE</h1>
+    <h1>🎬 REVIEWDLE</h1>
     <p class="sub">Guess the movie from its reviews. Six guesses. Each miss reveals another review.</p>
   </header>
 
@@ -146,8 +157,10 @@
     <div class="guess-grid" id="guessGrid"></div>
 
     <form class="guess-form" id="guessForm" autocomplete="off">
-      <input type="text" id="guessInput" list="movieList" placeholder="Type a movie title…" />
-      <datalist id="movieList"></datalist>
+      <div class="input-wrap">
+        <input type="text" id="guessInput" placeholder="Type a movie title…" autocomplete="off" />
+        <div class="suggestions" id="suggestions"></div>
+      </div>
       <button type="submit" class="primary" id="submitBtn">Guess</button>
     </form>
 
@@ -23001,32 +23014,74 @@ function stripYearSuffix(s) {
   return s.replace(/\s*\(\d{4}\)\s*$/, '').trim();
 }
 
-function fillDatalist(titles) {
-  const list = document.getElementById('movieList');
-  list.innerHTML = '';
+// Mobile Safari chokes hard on a native <datalist> stuffed with tens of
+// thousands of <option> elements (it materializes a huge picker UI and can
+// crash the whole browser on memory-constrained devices). Instead we keep
+// the full title list in a plain JS array and render only a handful of
+// matching suggestions as lightweight DOM nodes, built fresh per keystroke.
+let ALL_TITLES = [];
+
+function setTitlePool(titles) {
+  ALL_TITLES = titles.slice();
+  VALID_TITLES = new Set(titles.map(normalize));
+}
+
+function renderSuggestions(query) {
+  const box = document.getElementById('suggestions');
+  const q = query.trim().toLowerCase();
+  if (!q) {
+    box.innerHTML = '';
+    box.classList.remove('show');
+    return;
+  }
+  const starts = [];
+  const contains = [];
+  for (let i = 0; i < ALL_TITLES.length; i++) {
+    const t = ALL_TITLES[i];
+    const lower = t.toLowerCase();
+    if (lower.startsWith(q)) {
+      if (starts.length < 8) starts.push(t);
+    } else if (lower.includes(q)) {
+      if (contains.length < 8) contains.push(t);
+    }
+    if (starts.length >= 8 && contains.length >= 8) break;
+  }
+  const matches = starts.concat(contains).slice(0, 8);
+  box.innerHTML = '';
+  if (!matches.length) {
+    box.classList.remove('show');
+    return;
+  }
   const frag = document.createDocumentFragment();
-  const valid = new Set();
-  titles.forEach(t => {
-    const opt = document.createElement('option');
-    opt.value = formatTitleOption(t);
-    frag.appendChild(opt);
-    valid.add(normalize(t));
+  matches.forEach(t => {
+    const item = document.createElement('div');
+    item.className = 'suggestion-item';
+    item.textContent = formatTitleOption(t);
+    item.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const input = document.getElementById('guessInput');
+      input.value = t;
+      box.innerHTML = '';
+      box.classList.remove('show');
+      input.focus();
+    });
+    frag.appendChild(item);
   });
-  list.appendChild(frag);
-  VALID_TITLES = valid;
+  box.appendChild(frag);
+  box.classList.add('show');
 }
 
 function populateDatalist() {
   // Baseline: just the answer-pool titles. Works everywhere, including a
   // plain double-clicked local file.
   const fallbackTitles = MOVIES.map(m => m.title).sort((a, b) => a.localeCompare(b));
-  fillDatalist(fallbackTitles);
+  setTitlePool(fallbackTitles);
 
-  // Try to upgrade to a much larger guess list (tens of thousands of movies)
-  // so the autocomplete doesn't reveal which titles can actually be the
+  // Try to upgrade to a much larger guess pool (tens of thousands of movies)
+  // so the suggestions don't reveal which titles can actually be the
   // answer. Requires the page to be served over http(s) -- e.g. GitHub
   // Pages -- since a local file:// page can't fetch a sibling file in most
-  // browsers. Silently keeps the fallback list above if this fails.
+  // browsers. Silently keeps the fallback pool above if this fails.
   fetch('reviewdle_titles.json')
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(data => {
@@ -23036,9 +23091,9 @@ function populateDatalist() {
       for (const t in data) {
         if (!(t in YEARS) && data[t]) YEARS[t] = data[t];
       }
-      fillDatalist(titles);
+      setTitlePool(titles);
     })
-    .catch(() => { /* fallback list already in place, nothing more to do */ });
+    .catch(() => { /* fallback pool already in place, nothing more to do */ });
 }
 
 function startGame(newMode) {
@@ -23056,6 +23111,8 @@ function startGame(newMode) {
   document.getElementById('guessInput').disabled = false;
   document.getElementById('submitBtn').disabled = false;
   document.getElementById('guessInput').value = '';
+  document.getElementById('suggestions').innerHTML = '';
+  document.getElementById('suggestions').classList.remove('show');
   document.getElementById('summarySlot').innerHTML = '';
   document.getElementById('shareSlot').innerHTML = '';
   document.getElementById('statusLine').textContent = '';
@@ -23137,6 +23194,15 @@ function endGame() {
   }
 }
 
+document.getElementById('guessInput').addEventListener('input', (e) => {
+  renderSuggestions(e.target.value);
+});
+document.getElementById('guessInput').addEventListener('blur', () => {
+  setTimeout(() => {
+    document.getElementById('suggestions').classList.remove('show');
+  }, 150);
+});
+
 document.getElementById('guessForm').addEventListener('submit', (e) => {
   e.preventDefault();
   if (gameOver) return;
@@ -23155,6 +23221,8 @@ document.getElementById('guessForm').addEventListener('submit', (e) => {
   const correct = normalize(val) === normalize(current.title);
   guesses.push({ text: val, correct });
   input.value = '';
+  document.getElementById('suggestions').innerHTML = '';
+  document.getElementById('suggestions').classList.remove('show');
   if (correct) {
     won = true;
     render();
