@@ -22967,6 +22967,7 @@ let guesses = [];
 let gameOver = false;
 let won = false;
 let mode = "daily";
+let VALID_TITLES = new Set();
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({
@@ -22991,16 +22992,28 @@ function dailyIndex() {
   return h % MOVIES.length;
 }
 
+function formatTitleOption(title) {
+  const y = YEARS[title];
+  return y ? `${title} (${y})` : title;
+}
+
+function stripYearSuffix(s) {
+  return s.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+}
+
 function fillDatalist(titles) {
   const list = document.getElementById('movieList');
   list.innerHTML = '';
   const frag = document.createDocumentFragment();
+  const valid = new Set();
   titles.forEach(t => {
     const opt = document.createElement('option');
-    opt.value = t;
+    opt.value = formatTitleOption(t);
     frag.appendChild(opt);
+    valid.add(normalize(t));
   });
   list.appendChild(frag);
+  VALID_TITLES = valid;
 }
 
 function populateDatalist() {
@@ -23016,8 +23029,14 @@ function populateDatalist() {
   // browsers. Silently keeps the fallback list above if this fails.
   fetch('reviewdle_titles.json')
     .then(r => (r.ok ? r.json() : Promise.reject()))
-    .then(titles => {
-      if (Array.isArray(titles) && titles.length) fillDatalist(titles);
+    .then(data => {
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+      const titles = Object.keys(data);
+      if (!titles.length) return;
+      for (const t in data) {
+        if (!(t in YEARS) && data[t]) YEARS[t] = data[t];
+      }
+      fillDatalist(titles);
     })
     .catch(() => { /* fallback list already in place, nothing more to do */ });
 }
@@ -23122,8 +23141,17 @@ document.getElementById('guessForm').addEventListener('submit', (e) => {
   e.preventDefault();
   if (gameOver) return;
   const input = document.getElementById('guessInput');
-  const val = input.value.trim();
-  if (!val) return;
+  const statusLine = document.getElementById('statusLine');
+  const raw = stripYearSuffix(input.value.trim());
+  if (!raw) return;
+  if (!VALID_TITLES.has(normalize(raw))) {
+    statusLine.textContent = 'Pick a movie from the dropdown list.';
+    statusLine.className = 'status lose';
+    return;
+  }
+  statusLine.textContent = '';
+  statusLine.className = 'status';
+  const val = raw;
   const correct = normalize(val) === normalize(current.title);
   guesses.push({ text: val, correct });
   input.value = '';
