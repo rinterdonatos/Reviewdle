@@ -50,12 +50,22 @@
   .toolbar {
     display: flex; justify-content: center; gap: 10px; margin: 14px 0 20px; flex-wrap: wrap;
   }
+  .stats-bar {
+    display: none; justify-content: center; align-items: center; gap: 10px;
+    margin: -8px 0 18px; padding: 8px 14px; border-radius: 8px;
+    background: var(--card); border: 1px solid var(--border);
+    color: var(--text-dim); font-size: 0.8rem; flex-wrap: wrap; text-align: center;
+  }
+  .stats-bar.show { display: flex; }
+  .stats-bar strong { color: var(--gold); font-weight: bold; }
+  .stats-bar .sep { color: var(--border); }
   button {
     font-family: inherit; cursor: pointer; border-radius: 6px; border: 1px solid var(--border);
     background: var(--card); color: var(--text); padding: 8px 14px; font-size: 0.85rem;
     transition: background 0.15s, border-color 0.15s;
   }
   button:hover:not(:disabled) { border-color: var(--gold-dim); background: #29242f; }
+  button.active-mode { outline: 2px solid var(--gold); outline-offset: 2px; }
   button:disabled { opacity: 0.4; cursor: default; }
   button.primary { background: var(--gold); color: #201a0a; border-color: var(--gold); font-weight: bold; }
   button.primary:hover:not(:disabled) { background: #ecc766; }
@@ -131,8 +141,23 @@
   }
   .hint-toggle { text-align: center; margin-top: 4px; }
   .hint-toggle a { color: var(--text-dim); font-size: 0.8rem; cursor: pointer; text-decoration: underline; }
-  .how-to { display: none; font-size: 0.88rem; color: var(--text-dim); line-height: 1.6; margin-top: 10px; }
-  .how-to.show { display: block; }
+  .modal-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+    z-index: 100; align-items: center; justify-content: center; padding: 20px;
+  }
+  .modal-overlay.show { display: flex; }
+  .modal-box {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 26px 24px 22px; max-width: 480px; width: 100%; position: relative;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+  }
+  .modal-close {
+    position: absolute; top: 8px; right: 10px; background: transparent; border: none;
+    color: var(--text-dim); font-size: 1.6rem; line-height: 1; padding: 4px 8px; cursor: pointer;
+  }
+  .modal-close:hover { color: var(--gold); background: transparent; border-color: transparent; }
+  .modal-title { margin: 0 0 12px; color: var(--gold); font-size: 1.2rem; }
+  .how-to-text { font-size: 0.92rem; color: var(--text-dim); line-height: 1.6; margin: 0; }
 </style>
 </head>
 <body>
@@ -146,8 +171,9 @@
   <div class="toolbar">
     <button id="dailyBtn">Today's Movie</button>
     <button id="randomBtn">Random Movie</button>
-    <button id="giveUpBtn" class="danger">Give Up</button>
   </div>
+
+  <div class="stats-bar" id="statsBar"></div>
 
   <div class="card">
     <div class="review-log" id="reviewLog"></div>
@@ -164,17 +190,28 @@
       <button type="submit" class="primary" id="submitBtn">Guess</button>
     </form>
 
+    <div style="text-align:center; margin: 10px 0 0;">
+      <button id="giveUpBtn" class="danger">Give Up</button>
+    </div>
+
     <div class="status" id="statusLine"></div>
     <div id="summarySlot"></div>
     <div id="shareSlot"></div>
   </div>
 
   <div class="hint-toggle"><a id="howToLink">how to play</a></div>
-  <div class="how-to" id="howTo">
-    A movie is picked — either the daily pick (same for everyone, based on today's date) or a random one for practice.
-    You start with one vague review. Guess the movie title in the box (autocomplete will suggest titles from the pool).
-    Every wrong guess reveals another, more specific review — six in total. If you're still wrong after your sixth guess,
-    the full plot summary is revealed along with the answer.
+
+  <div class="modal-overlay" id="howToOverlay">
+    <div class="modal-box">
+      <button class="modal-close" id="howToClose" aria-label="Close">&times;</button>
+      <h2 class="modal-title">How to Play</h2>
+      <p class="how-to-text">
+        There are two different game modes, either Today's Movie, which is the same for everyone, or a Random Movie which is 
+        different each time. You start with one vague review. Guess the movie title in the box (autocomplete will suggest titles
+        from the pool). Every wrong guess reveals another, more specific review, six in total. If you're still wrong after your
+        sixth guess, the full plot summary is revealed along with the answer.
+      </p>
+    </div>
   </div>
 
   <footer>Made for movie nerds. Refresh for a new random round anytime — "Today's Movie" resets to the daily pick.<br>Reviews are real, user-submitted reviews sourced via the TMDB API. This product uses the TMDB API but is not endorsed or certified by TMDB.</footer>
@@ -22982,6 +23019,58 @@ let won = false;
 let mode = "daily";
 let VALID_TITLES = new Set();
 
+const STATS_KEY = 'reviewdle_random_stats_v1';
+
+function loadStats() {
+  try {
+    const raw = localStorage.getItem(STATS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return {
+        played: parsed.played || 0,
+        won: parsed.won || 0,
+        currentStreak: parsed.currentStreak || 0,
+        longestStreak: parsed.longestStreak || 0,
+      };
+    }
+  } catch (e) { /* localStorage unavailable or corrupted, just start fresh */ }
+  return { played: 0, won: 0, currentStreak: 0, longestStreak: 0 };
+}
+
+let STATS = loadStats();
+
+function saveStats() {
+  try { localStorage.setItem(STATS_KEY, JSON.stringify(STATS)); } catch (e) { /* ignore */ }
+}
+
+function recordRandomResult(didWin) {
+  STATS.played += 1;
+  if (didWin) {
+    STATS.won += 1;
+    STATS.currentStreak += 1;
+    if (STATS.currentStreak > STATS.longestStreak) STATS.longestStreak = STATS.currentStreak;
+  } else {
+    STATS.currentStreak = 0;
+  }
+  saveStats();
+  renderStatsBar();
+}
+
+function renderStatsBar() {
+  const bar = document.getElementById('statsBar');
+  if (mode !== 'random') {
+    bar.classList.remove('show');
+    return;
+  }
+  const pct = STATS.played ? Math.round((STATS.won / STATS.played) * 100) : 0;
+  bar.innerHTML =
+    `<span><strong>${pct}%</strong> correct</span>` +
+    `<span class="sep">•</span><span>${STATS.played} played</span>` +
+    `<span class="sep">•</span><span>streak <strong>${STATS.currentStreak}</strong></span>` +
+    `<span class="sep">•</span><span>best <strong>${STATS.longestStreak}</strong></span>`;
+  bar.classList.add('show');
+}
+
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
@@ -23101,6 +23190,8 @@ function startGame(newMode) {
   gameOver = false;
   won = false;
   guesses = [];
+  document.getElementById('dailyBtn').classList.toggle('active-mode', mode === 'daily');
+  document.getElementById('randomBtn').classList.toggle('active-mode', mode === 'random');
   if (mode === "daily") {
     current = MOVIES[dailyIndex()];
   } else {
@@ -23114,11 +23205,13 @@ function startGame(newMode) {
   document.getElementById('suggestions').innerHTML = '';
   document.getElementById('suggestions').classList.remove('show');
   document.getElementById('summarySlot').innerHTML = '';
+  renderStatsBar();
   document.getElementById('shareSlot').innerHTML = '';
   document.getElementById('statusLine').textContent = '';
   document.getElementById('statusLine').className = 'status';
   render();
-  document.getElementById('guessInput').focus();
+  document.getElementById('guessInput').focus({ preventScroll: true });
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function render() {
@@ -23167,6 +23260,9 @@ function movieLabel(title) {
 
 function endGame() {
   gameOver = true;
+  if (mode === 'random') {
+    recordRandomResult(won);
+  }
   document.getElementById('guessInput').disabled = true;
   document.getElementById('submitBtn').disabled = true;
   const statusLine = document.getElementById('statusLine');
@@ -23246,7 +23342,16 @@ document.getElementById('giveUpBtn').addEventListener('click', () => {
   endGame();
 });
 document.getElementById('howToLink').addEventListener('click', () => {
-  document.getElementById('howTo').classList.toggle('show');
+  document.getElementById('howToOverlay').classList.add('show');
+});
+document.getElementById('howToClose').addEventListener('click', () => {
+  document.getElementById('howToOverlay').classList.remove('show');
+});
+document.getElementById('howToOverlay').addEventListener('click', (e) => {
+  if (e.target.id === 'howToOverlay') document.getElementById('howToOverlay').classList.remove('show');
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.getElementById('howToOverlay').classList.remove('show');
 });
 
 populateDatalist();
