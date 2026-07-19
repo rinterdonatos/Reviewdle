@@ -166,10 +166,10 @@ def build_title_variants(title):
         variants.add(suffix)
         if len(prefix) >= 3:
             variants.add(prefix)
-    base = re.sub(r"[:\-–].*$", "", t).strip()
+    base = re.sub(r"(?:\s*:\s*|\s+[-–]\s+).*$", "", t).strip()
     variants.add(base)
     if m:
-        base2 = re.sub(r"[:\-–].*$", "", m.group(2)).strip()
+        base2 = re.sub(r"(?:\s*:\s*|\s+[-–]\s+).*$", "", m.group(2)).strip()
         variants.add(base2)
     more = set()
     for v in list(variants):
@@ -185,7 +185,7 @@ def core_word(title):
     m = re.match(r"^.*?'s\s+(.+)$", t)
     if m:
         t = m.group(1)
-    t = re.sub(r"[:\-–].*$", "", t).strip()
+    t = re.sub(r"(?:\s*:\s*|\s+[-–]\s+).*$", "", t).strip()
     t = re.sub(r'^(The|A|An)\s+', '', t, flags=re.IGNORECASE)
     words = re.findall(r"[A-Za-z']+", t)
     if not words:
